@@ -114,6 +114,16 @@ impl<S, R, FnUInput> WeylusClientHandler<S, R, FnUInput> {
                         MessageInbound::WheelEvent(event) => self.process_wheel_event(&event),
                         MessageInbound::KeyboardEvent(event) => self.process_keyboard_event(&event),
                         MessageInbound::GetCapturableList => self.send_capturable_list(),
+                        MessageInbound::SetCaptureCursor(capture_cursor) => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                self.capture_cursor = capture_cursor;
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = capture_cursor;
+                            }
+                        }
                         MessageInbound::Config(config) => self.update_config(config),
                         MessageInbound::PauseVideo => {
                             self.video_sender.send(VideoCommands::Pause).unwrap()

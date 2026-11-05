@@ -460,6 +460,7 @@ fn select_sources(
     // 2: Embedded: The cursor is embedded as part of the stream buffers.
     // 4: Metadata: The cursor is not part of the screen cast stream, but sent as PipeWire stream metadata.
     let cursor_mode = if capture_cursor { 2u32 } else { 1u32 };
+    debug!("Requesting screen capture with cursor_mode: {cursor_mode}.");
 
     let is_plasma = std::env::var("DESKTOP_SESSION").map_or(false, |s| s.contains("plasma"));
     if is_plasma && capture_cursor {

@@ -191,11 +191,12 @@ void init_scaler(
 	char args[512];
 	const AVFilter* buffersrc = avfilter_get_by_name("buffer");
 	const AVFilter* buffersink = avfilter_get_by_name("buffersink");
-	AVFilterInOut* outputs = avfilter_inout_alloc();
-	AVFilterInOut* inputs = avfilter_inout_alloc();
+	AVFilterInOut* outputs = NULL;
+	AVFilterInOut* inputs = NULL;
+	AVFilterGraphSegment* seg = NULL;
 
 	ctx->filter_graph_scale = avfilter_graph_alloc();
-	if (!outputs || !inputs || !ctx->filter_graph_scale)
+	if (!ctx->filter_graph_scale)
 	{
 		ret = AVERROR(ENOMEM);
 		goto end;
@@ -255,16 +256,6 @@ void init_scaler(
 		goto end;
 	}
 
-	outputs->name = av_strdup("in");
-	outputs->filter_ctx = ctx->buffersrc_scale_ctx;
-	outputs->pad_idx = 0;
-	outputs->next = NULL;
-
-	inputs->name = av_strdup("out");
-	inputs->filter_ctx = ctx->buffersink_scale_ctx;
-	inputs->pad_idx = 0;
-	inputs->next = NULL;
-
 	switch (pix_fmt_out)
 	{
 	case AV_PIX_FMT_CUDA:
@@ -293,40 +284,81 @@ void init_scaler(
 		}
 		break;
 	case AV_PIX_FMT_VAAPI:
-		if (pix_fmt_in == AV_PIX_FMT_RGB24)
-			snprintf(
-				args,
-				sizeof(args),
-				"scale=w=%d:h=%d:flags=fast_bilinear,hwupload",
-				width_out,
-				height_out);
-		else
-			snprintf(
-				args,
-				sizeof(args),
-				"hwupload,scale_vaapi=w=%d:h=%d:format=%s:mode=fast",
-				width_out,
-				height_out,
-				av_get_pix_fmt_name(pix_fmt_sw_out));
+		snprintf(
+			args,
+			sizeof(args),
+			"scale=w=%d:h=%d:flags=fast_bilinear,format=%s,hwupload",
+			width_out,
+			height_out,
+			av_get_pix_fmt_name(pix_fmt_sw_out));
 		break;
 	default:
 		snprintf(args, sizeof(args), "scale=w=%d:h=%d:flags=fast_bilinear", width_out, height_out);
 	}
 
-	if ((ret = avfilter_graph_parse_ptr(ctx->filter_graph_scale, args, &inputs, &outputs, NULL)) <
-		0)
+	if ((ret = avfilter_graph_segment_parse(ctx->filter_graph_scale, args, 0, &seg)) < 0)
 	{
 		log_warn("Failed to parse filter");
 		goto end;
 	}
 
-	for (unsigned int i = 0; i < ctx->filter_graph_scale->nb_filters; i++)
+	if ((ret = avfilter_graph_segment_create_filters(seg, 0)) < 0)
 	{
-		AVFilterContext* filt = ctx->filter_graph_scale->filters[i];
-		if (strcmp(filt->filter->name, "hwupload") == 0)
+		log_warn("Failed to create filters");
+		goto end;
+	}
+
+	for (size_t i = 0; i < seg->nb_chains; i++)
+	{
+		AVFilterChain* chain = seg->chains[i];
+		for (size_t j = 0; j < chain->nb_filters; j++)
 		{
-			filt->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+			AVFilterParams* params = chain->filters[j];
+			if (params->filter && hw_device_ctx &&
+				(params->filter->filter->flags & AVFILTER_FLAG_HWDEVICE))
+			{
+				params->filter->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+			}
 		}
+	}
+
+	if ((ret = avfilter_graph_segment_apply_opts(seg, 0)) < 0)
+	{
+		log_warn("Failed to apply filter options");
+		goto end;
+	}
+
+	if ((ret = avfilter_graph_segment_init(seg, 0)) < 0)
+	{
+		log_warn("Failed to initialize filters");
+		goto end;
+	}
+
+	if ((ret = avfilter_graph_segment_link(seg, 0, &inputs, &outputs)) < 0)
+	{
+		log_warn("Failed to link filters");
+		goto end;
+	}
+
+	if (!inputs || !outputs)
+	{
+		ret = AVERROR(EINVAL);
+		log_warn("Filter graph is missing an input or output");
+		goto end;
+	}
+
+	if ((ret = avfilter_link(
+			 ctx->buffersrc_scale_ctx, 0, inputs->filter_ctx, inputs->pad_idx)) < 0)
+	{
+		log_warn("Failed to link filter graph input");
+		goto end;
+	}
+
+	if ((ret = avfilter_link(
+			 outputs->filter_ctx, outputs->pad_idx, ctx->buffersink_scale_ctx, 0)) < 0)
+	{
+		log_warn("Failed to link filter graph output");
+		goto end;
 	}
 
 	if ((ret = avfilter_graph_config(ctx->filter_graph_scale, NULL)) < 0)
@@ -336,6 +368,7 @@ void init_scaler(
 	}
 
 end:
+	avfilter_graph_segment_free(&seg);
 	avfilter_inout_free(&inputs);
 	avfilter_inout_free(&outputs);
 

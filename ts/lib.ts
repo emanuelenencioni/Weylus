@@ -226,7 +226,11 @@ class Settings {
         // server
         let upd_server_config = () => { this.save_settings(); this.send_server_config() };
         this.checks.get("uinput_support").onchange = upd_server_config;
-        this.checks.get("capture_cursor").onchange = upd_server_config;
+        this.checks.get("capture_cursor").onchange = () => {
+            this.save_settings();
+            this.send_capture_cursor();
+            this.webSocket.send('"GetCapturableList"');
+        };
         this.scale_video_input.onchange = upd_server_config;
         this.client_name_input.onchange = upd_server_config;
         this.frame_rate_input.onchange = upd_server_config;
@@ -252,6 +256,11 @@ class Settings {
         if (this.client_name_input.value)
             config["client_name"] = this.client_name_input.value;
         this.webSocket.send(JSON.stringify({ "Config": config }));
+    }
+
+    send_capture_cursor() {
+        let capture_cursor = this.checks.get("capture_cursor").checked;
+        this.webSocket.send(JSON.stringify({ "SetCaptureCursor": capture_cursor }));
     }
 
     save_settings() {
@@ -371,9 +380,13 @@ class Settings {
         });
         if (new_index !== undefined)
             this.capturable_select.value = String(new_index);
-        else if (current_selection)
-            // Can't find the window, so don't select anything
+        else if (window_names.length > 0)
+            this.capturable_select.value = "0";
+        else
             this.capturable_select.value = "";
+
+        if (this.capturable_select.value !== "")
+            this.send_server_config();
     }
 
     toggle_energysaving(energysaving: boolean) {
@@ -1086,23 +1099,32 @@ function init() {
     video.disableRemotePlayback = true;
     video.onloadeddata = () => stretch_video();
     let is_connected = false;
+    let config_error_count = 0;
     handle_messages(webSocket, video, () => {
+        config_error_count = 0;
         if (!is_connected) {
             new KeyboardHandler(webSocket);
             new PointerHandler(webSocket);
             is_connected = true;
         }
     },
-        (err) => alert(err),
+        (err: string) => {
+            log(LogLevel.WARN, "Config error: " + err);
+            if (config_error_count === 0) {
+                config_error_count += 1;
+                webSocket.send('"GetCapturableList"');
+            } else {
+                alert(err);
+            }
+        },
         (window_names) => settings.onCapturableList(window_names)
     );
     window.onunload = () => { webSocket.close(); }
     webSocket.onopen = function(event) {
+        settings.send_capture_cursor();
         webSocket.send('"GetCapturableList"');
         if (!settings.video_enabled())
             webSocket.send('"PauseVideo"');
-
-        settings.send_server_config();
 
         document.onvisibilitychange = () => {
             if (document.hidden) {

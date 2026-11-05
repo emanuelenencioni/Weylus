@@ -3,11 +3,18 @@
 
 Weylus turns your tablet or smart phone into a graphic tablet/touch screen for your computer!
 
-Weylus in action with [Xournal++](https://github.com/xournalpp/xournalpp):
+## Why this fork
 
-![Weylus in action](In_action.gif)
+GPU (VAAPI) encoding was broken on my Intel iGPU (TigerLake, iHD). Software too much CPU
+intense and lagged. VAAPI produced a black/corrupt image because Weylus did the RGB→NV12
+conversion on the GPU (`scale_vaapi`) and attached the hardware device to the filter graph too late
+on modern FFmpeg. This fork converts to NV12 on the CPU before upload and builds the graph with
+FFmpeg's segment API.
+
+Based on upstream [H-M-H/Weylus](https://github.com/H-M-H/Weylus) (`master`).
 
 ## Table of Contents
+* [Why this fork](#why-this-fork)
 * [Features](#features)
 * [Installation](#installation)
     * [Packages](#packages)
@@ -15,6 +22,7 @@ Weylus in action with [Xournal++](https://github.com/xournalpp/xournalpp):
     * [Fullscreen](#fullscreen)
     * [Keyboard Input](#keyboard-input)
     * [Automation](#automation)
+    * [Running this build](#running-this-build)
     * [Linux](#linux)
         * [Wayland](#wayland)
         * [Hardware Acceleration](#hardware-acceleration)
@@ -28,6 +36,8 @@ Weylus in action with [Xournal++](https://github.com/xournalpp/xournalpp):
     * [Windows](#windows)
         * [Hardware Acceleration](#hardware-acceleration-2)
 * [Building](#building)
+    * [Modern systems](#modern-systems)
+    * [Install (user-local)](#install-user-local)
     * [Docker](#docker)
 * [How does this work?](#how-does-this-work)
     * [Stylus/Touch](#stylustouch)
@@ -94,6 +104,15 @@ you can do so by parsing the log Weylus generates. You may want to enable more v
 setting the environment variable `WEYLUS_LOG_LEVEL` to `DEBUG` or `TRACE` as well as
 `WEYLUS_LOG_JSON` to `true` to enable easily parseable JSON logging.
 
+### Running this build
+
+```sh
+weylus --try-vaapi --wayland-support
+```
+
+The same options can be set in `~/.config/weylus/weylus.toml` (`try_vaapi = true`,
+`wayland_support = true`). On Wayland the screen is selected through the desktop portal picker.
+
 ### Linux
 Weylus uses the `uinput` interface to simulate input events on Linux. **To enable stylus and
 multi-touch support `/dev/uinput` needs to be writable by Weylus.** To make `/dev/uinput`
@@ -132,7 +151,10 @@ is required.
 There are still some things that do not work:
 - input mapping for windows
 - displaying proper window names
-- capturing the cursor
+
+Capturing the cursor is supported: enable "Capture Cursor" in the web UI. Weylus recreates the
+portal session with an embedded cursor. If your portal needs it, set `screencopy { cursor_mode = 2 }`
+in `~/.config/hypr/xdph.conf`.
 
 #### Hardware Acceleration
 On Linux Weylus supports hardware accelerated video encoding through the Video Acceleration API
@@ -149,6 +171,10 @@ devices can be found in `/dev/dri`. On some systems this is not optional and thi
 set. If VAAPI doesn't work out of the box for you, have a look into `/dev/dri`, often setting
 `WEYLUS_VAAPI_DEVICE=/dev/dri/renderD129` is already the solution. Note that you may need to install
 the driver(s) first.
+
+On Intel GPUs using the iHD driver, this fork converts frames to NV12 on the CPU before uploading
+them to the GPU. This avoids a broken GPU-side RGB→NV12 conversion and keeps output correct at
+roughly 35-45% CPU instead of ~90% with libx264 (Values come from a quick not much accurate test).
 
 Nvidias NVENC is very fast but delivers a video stream of noticeably lower quality (at least on my
 GeForce GTX 1050 Mobile GPU) but more recent GPUs should provide higher quality. For this to work
@@ -299,6 +325,41 @@ The build script will only try to build ffmpeg if the directory `deps/dist` does
 Alternatively passing `--features ffmpeg-system` to cargo will build Weylus using the system's
 version of ffmpeg. This is disabled by default for compatibility reasons, on newer systems this
 should not pose a problem and using the system libraries is advised.
+
+### Modern systems
+
+On a late 2026 Arch Linux system the build dependencies are:
+```sh
+sudo pacman -S --needed rust npm cmake nasm pkgconf gstreamer gst-plugins-base \
+    libva libdrm libx11 libxext libxfixes libxcomposite libxrandr libxi \
+    libxcursor libxinerama libxrender libxv libxtst
+```
+
+TypeScript 6 enables `strict` by default and requires an explicit `rootDir`, so the plain `tsc`
+invocation in `build.rs` fails. Generate the web client first and make it newer than `ts/lib.ts`
+so the build script skips `tsc`:
+```sh
+tsc --rootDir ts --strict false
+touch www/static/lib.js
+```
+Alternatively install TypeScript 5 (`npm install -g typescript@5`).
+
+Then build against the system FFmpeg (9.x):
+```sh
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo build --release --features ffmpeg-system
+```
+`--features ffmpeg-system` links the system FFmpeg, GStreamer and libva instead of building the
+vendored FFmpeg n8.0. Omit it for a self-contained binary (the first build takes considerably
+longer).
+
+### Install (user-local)
+
+```sh
+install -Dm755 target/release/weylus ~/.local/bin/weylus
+install -Dm644 weylus.desktop ~/.local/share/applications/weylus.desktop
+```
+Make sure `~/.local/bin` is in your `PATH`. For stylus and multi-touch support follow the
+[uinput setup](#linux).
 
 ### Docker
 It is also possible to build the Linux version inside a docker container. The Dockerfile used is

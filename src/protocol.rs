@@ -18,6 +18,7 @@ pub enum MessageInbound {
     WheelEvent(WheelEvent),
     KeyboardEvent(KeyboardEvent),
     GetCapturableList,
+    SetCaptureCursor(bool),
     Config(ClientConfiguration),
     PauseVideo,
     ResumeVideo,
