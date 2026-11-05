@@ -1,5 +1,4 @@
 # Weylus
-![Build](https://github.com/H-M-H/Weylus/workflows/Build/badge.svg)
 
 Weylus turns your tablet or smart phone into a graphic tablet/touch screen for your computer!
 
